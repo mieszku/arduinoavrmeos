@@ -1,0 +1,102 @@
+/*
+ * Copyright (c) 2016 Mieszko Mazurek
+ */
+
+#include <core/thread.h>
+#include <core/system.h>
+#include <core/panic.h>
+#include <core/memalloc.h>
+#include <core/task.h>
+#include <core/mutex.h>
+#include <hardware/gpio.h>
+#include <hardware/adc.h>
+#include <drivers/hd44780lcd.h>
+#include <drivers/hd44780gpio.h>
+
+hd44780lcd_t*	lcd;
+mutex_t		lcdlock;
+mutex_t		tasklock;
+
+void thread (void* obj)
+{
+	while (1) {
+		mutex_lock (&tasklock);
+		mutex_lock (&lcdlock);
+
+		hd44780lcd_set_position (lcd, 0, 0);
+		ostream_put_string (OSTREAM (lcd), "time: ");
+		ostream_put_int (OSTREAM (lcd), system_get_time ());
+
+		mutex_unlock (&lcdlock);
+	}
+}
+
+uint8_t task (void* obj)
+{
+	mutex_unlock (&tasklock);
+	return 1;
+}
+
+int main (void)
+{
+	hd44780gpio_t* lcditf;
+
+	system_init ();
+
+	gpio_mode_output (GPIO_PIN13);
+
+	lcditf = hd44780gpio_new (GPIO_PIN2, GPIO_PIN3, GPIO_PIN4,
+				  0, 0, 0, 0,
+				  GPIO_PIN9, GPIO_PIN10, GPIO_PIN11, GPIO_PIN12);
+	lcd = hd44780lcd_new (HD44780ITF (lcditf), INTERFACE_MODE_4BIT, LCD4X20);
+
+	hd44780lcd_clear (lcd);
+
+	thread_run_alloc (thread, NULL, "thread", 100);
+	task_register (task, NULL, 4000, 1000);
+
+	while (1) {
+		mutex_lock (&lcdlock);
+
+		hd44780lcd_set_position (lcd, 1, 0);
+		ostream_put_string (OSTREAM (lcd), "rand:       "); 
+		hd44780lcd_set_position (lcd, 1, 6);
+		ostream_put_int (OSTREAM (lcd), system_rand ());
+
+		mutex_unlock (&lcdlock);
+
+		gpio_toggle (GPIO_PIN13);
+		system_sleep (650);
+	}
+}
+
+void panic (error_t err)
+{
+	hd44780lcd_clear (lcd);
+	hd44780lcd_set_position (lcd, 0, 0);
+	ostream_put_string (OSTREAM (lcd), "panic: ");
+	hd44780lcd_set_position (lcd, 1, 0);
+
+	const char* strerr;
+
+	switch (err) {
+	case ERROR_STACK_SMASH:
+		strerr = "STACK SMASH"; break;
+	case ERROR_XMEMALLOC:
+		strerr = "XMEMALLOC"; break;
+	case ERROR_INVALID_ARGUMENT:
+		strerr = "INVALID ARGUMENT"; break;
+	case ERROR_PURE_VIRTUAL:
+		strerr = "PURE VIRTUAL"; break;
+	default:
+		strerr = "UNKNOWN ERROR";
+	}
+
+	ostream_put_string (OSTREAM (lcd), strerr);
+
+	gpio_mode_output (GPIO_PIN13);
+	while (1) {
+		gpio_toggle (GPIO_PIN13);
+		system_sleep (25);
+	}
+}
